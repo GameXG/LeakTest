@@ -4,6 +4,7 @@ dist
 coverage
 *.tsbuildinfo
 .DS_Store
+AGENTS.md
 .env
 .env.local
 npm-debug.log*

@@ -1,29 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SOURCE_REGISTRY } from "./source-registry";
+import {
+  buildBrowserRestrictedVendor,
+  buildClaudeVendor,
+  buildGoogleVendor,
+  buildOpenAiVendor,
+  buildUnavailableVendor,
+  type GoogleIncident,
+  type OfficialSummaryResponse,
+  type OfficialVendorStatus
+} from "./status-normalizer";
 import type { DiagnosticsProgress } from "./use-live-diagnostics";
 
-export type OfficialServiceStatus = {
-  id: string;
-  label: string;
-  status: string;
-  statusCn: string;
-  sourceName: string;
-  updatedAt?: string;
-};
-
-export type OfficialVendorStatus = {
-  id: string;
-  label: string;
-  pageUrl: string;
-  apiUrl: string;
-  overallLabel: string;
-  overallIndicator: string;
-  updatedAt?: string;
-  services: OfficialServiceStatus[];
-  sourceCount: number;
-  error?: string;
-};
+export type { OfficialVendorStatus } from "./status-normalizer";
 
 type OfficialStatusState = {
   loading: boolean;
@@ -52,26 +43,23 @@ const initialState: OfficialStatusState = {
   totalServiceCount: 0
 };
 
-function makeProgress(step: number): DiagnosticsProgress {
-  return {
-    label: PROGRESS_STEPS[Math.max(0, Math.min(step - 1, PROGRESS_STEPS.length - 1))],
-    completed: step,
-    total: PROGRESS_STEPS.length,
-    percent: Math.round((step / PROGRESS_STEPS.length) * 100)
-  };
-}
-
 async function fetchJson<T>(url: string) {
   const response = await fetch(url, {
     cache: "no-store",
+    credentials: "omit",
+    mode: "cors",
     signal: AbortSignal.timeout(8000)
   });
 
   if (!response.ok) {
-    throw new Error(`请求失败：${new URL(url, window.location.origin).pathname}`);
+    throw new Error(`请求失败：${new URL(url).host}`);
   }
 
   return (await response.json()) as T;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "官方状态源不可用";
 }
 
 export function useOfficialStatusReport() {
@@ -84,47 +72,67 @@ export function useOfficialStatusReport() {
     async function run() {
       setState(initialState);
 
-      try {
-        const payload = await fetchJson<{
-          checkedAt?: string;
-          vendors?: OfficialVendorStatus[];
-          error?: string;
-        }>(
-          "/api/official-status",
-        );
+      const [claudeSummary, openAiSummary, googleIncidents] = await Promise.allSettled([
+        fetchJson<OfficialSummaryResponse>(SOURCE_REGISTRY.officialStatus.claude.apiUrl),
+        fetchJson<OfficialSummaryResponse>(SOURCE_REGISTRY.officialStatus.openai.apiUrl),
+        fetchJson<GoogleIncident[]>(SOURCE_REGISTRY.officialStatus.google.incidentsUrl)
+      ]);
 
-        if (cancelled) {
-          return;
-        }
-
-        if (payload.error) {
-          throw new Error(payload.error);
-        }
-
-        const vendors = payload.vendors ?? [];
-
-        setState({
-          loading: false,
-          progress: undefined,
-          checkedAt: payload.checkedAt,
-          vendors,
-          totalServiceCount: vendors.reduce((sum, vendor) => sum + vendor.services.length, 0)
-        });
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        setState({
-          ...initialState,
-          loading: false,
-          progress: undefined,
-          error: error instanceof Error ? error.message : "获取官方状态失败"
-        });
+      if (cancelled) {
+        return;
       }
+
+      const claudeVendor = claudeSummary.status === "fulfilled"
+        ? buildClaudeVendor(claudeSummary.value)
+        : buildUnavailableVendor(
+            "claude",
+            "Claude",
+            SOURCE_REGISTRY.officialStatus.claude.pageUrl,
+            SOURCE_REGISTRY.officialStatus.claude.apiUrl,
+            errorMessage(claudeSummary.reason),
+          );
+      const openAiVendor = openAiSummary.status === "fulfilled"
+        ? buildOpenAiVendor(openAiSummary.value)
+        : buildUnavailableVendor(
+            "openai",
+            "OpenAI",
+            SOURCE_REGISTRY.officialStatus.openai.pageUrl,
+            SOURCE_REGISTRY.officialStatus.openai.apiUrl,
+            errorMessage(openAiSummary.reason),
+          );
+      const googleVendor = googleIncidents.status === "fulfilled"
+        ? buildGoogleVendor(googleIncidents.value)
+        : buildUnavailableVendor(
+            "google",
+            "Google",
+            SOURCE_REGISTRY.officialStatus.google.pageUrl,
+            SOURCE_REGISTRY.officialStatus.google.incidentsUrl,
+            errorMessage(googleIncidents.reason),
+          );
+      const appleVendor = buildBrowserRestrictedVendor(
+        "apple",
+        "Apple",
+        SOURCE_REGISTRY.officialStatus.apple.pageUrl,
+        SOURCE_REGISTRY.officialStatus.apple.apiUrl,
+        "Apple 官方状态数据未开放浏览器跨域读取，请打开官方状态页核对。",
+      );
+      const vendors: OfficialVendorStatus[] = [claudeVendor, openAiVendor, googleVendor, appleVendor];
+      const readableVendors = vendors.filter((vendor) => vendor.id !== "apple");
+      const error = readableVendors.every((vendor) => vendor.overallIndicator === "unavailable")
+        ? "当前浏览器无法读取任何可用的官方状态源。请检查网络或直接打开各厂商官方状态页。"
+        : undefined;
+
+      setState({
+        loading: false,
+        progress: undefined,
+        checkedAt: new Date().toISOString(),
+        vendors,
+        totalServiceCount: vendors.reduce((sum, vendor) => sum + vendor.services.length, 0),
+        error
+      });
     }
 
-    run();
+    void run();
 
     return () => {
       cancelled = true;

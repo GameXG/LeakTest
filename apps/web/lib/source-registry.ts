@@ -163,13 +163,10 @@ export const SOURCE_REGISTRY = {
     },
     openai: {
       pageUrl: "https://status.openai.com/",
-      apiUrl: "https://status.openai.com/api/v2/summary.json",
-      atomUrl: "https://status.openai.com/feed.atom",
-      rssUrl: "https://status.openai.com/feed.rss"
+      apiUrl: "https://status.openai.com/api/v2/summary.json"
     },
     google: {
       pageUrl: "https://www.google.com/appsstatus/dashboard/",
-      productsUrl: "https://www.google.com/appsstatus/dashboard/products.json",
       incidentsUrl: "https://www.google.com/appsstatus/dashboard/incidents.json"
     },
     apple: {

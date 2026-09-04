@@ -1,6 +1,6 @@
 import { defineCloudflareConfig } from "@opennextjs/cloudflare";
 
 export default defineCloudflareConfig({
-  // Current pages rely on direct fetches and route handlers only.
+  // The Worker serves the app; browser code reads supported third-party sources directly.
   // No additional cache/storage bindings are required for this build.
 });

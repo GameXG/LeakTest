@@ -11,7 +11,7 @@ The product does not merely report raw signals. It explains whether a user's env
 - Help users determine whether their browsing environment exposes their real network identity
 - Identify which subsystem leaks information: IP, DNS, WebRTC, timezone, device traits, or User-Agent
 - Provide evidence-backed explanations instead of a binary pass/fail result
-- Create a foundation for future batch testing and API access
+- Keep the core diagnostic experience browser-native and independent of a first-party data service
 
 ## 3. Non-Goals
 
@@ -47,7 +47,7 @@ The product does not merely report raw signals. It explains whether a user's env
 
 ### In Scope
 
-- Session creation and report generation
+- Browser-run diagnostics and local report rendering
 - Multi-source HTTP IP observation
 - Timezone and locale consistency checks
 - Report page with overall score and module-level findings
@@ -71,11 +71,11 @@ The product does not merely report raw signals. It explains whether a user's env
 
 ## 9. Feature Requirements
 
-### 9.1 Session Management
+### 9.1 Browser Run State
 
-- The system must create a unique session for each test run
-- Each session must have an expiring signed client token
-- Each session must track collection state and final report state
+- Each run must have an isolated browser-side state object
+- The browser must show collection progress and partial source failures
+- The product must not require a first-party session token or collector API
 
 ### 9.2 Multi-Source IP Detection
 
@@ -85,7 +85,7 @@ The product does not merely report raw signals. It explains whether a user's env
 
 ### 9.3 DNS Leak Detection
 
-- The system must generate unique per-session hostnames
+- The browser must generate unique random probe labels when triggering DNS probes
 - The authoritative DNS service must log resolver IP, ASN, region, query type, and timestamps
 - The system must flag DNS resolvers that appear inconsistent with the observed exit path
 
@@ -145,13 +145,13 @@ Suggested module weights:
 ## 12. Privacy Requirements
 
 - The product must disclose collected data before a session starts
-- Raw network artifacts must have a retention limit
-- Report links should expire by default
-- Sensitive raw values should be redacted where possible in public share flows
+- Raw diagnostic values should remain in browser state unless a user explicitly exports them
+- The current product must not create durable report links or server-side retention
+- Sensitive raw values should be redacted where possible in any future share or export flow
 
 ## 13. Success Metrics
 
-- Successful report generation rate
+- Successful diagnostic completion rate
 - Median test completion time
 - False-positive rate based on manual review samples
 - Percentage of sessions with actionable findings
@@ -161,7 +161,7 @@ Suggested module weights:
 
 ### Phase 1
 
-- Session lifecycle
+- Browser collector lifecycle
 - Browser collector shell
 - HTTP IP detection
 - Timezone consistency
@@ -184,6 +184,5 @@ Suggested module weights:
 ### Phase 4
 
 - Production hardening
-- Admin dashboard
-- Public API
-- Batch execution support
+- Optional local export and user-controlled sharing
+- Any durable reports, public API, or batch execution must be designed as a separate product boundary

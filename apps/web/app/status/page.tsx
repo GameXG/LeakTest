@@ -6,7 +6,16 @@ import { useOfficialStatusReport } from "../../lib/use-official-status-report";
 
 function indicatorClass(indicator?: string) {
   if (indicator === "none") return "ok";
-  if (indicator === "minor") return "warn";
+  if (indicator === "unknown") return "";
+  if (
+    indicator === "minor" ||
+    indicator === "degraded_performance" ||
+    indicator === "partial_outage" ||
+    indicator === "maintenance" ||
+    indicator === "under_maintenance"
+  ) {
+    return "warn";
+  }
   if (indicator === "unavailable") return "";
   return "danger";
 }
@@ -47,7 +56,7 @@ export default function StatusPage() {
     <RiskShell
       section="status"
       title="服务状态查询"
-      lead="获取主流网站尤其是 AI 服务的官方在线状态接口数据，比如 Claude、ChatGPT、Codex、Google、Apple 等。"
+      lead="浏览器直接读取 Claude、ChatGPT、Codex、Google、Apple 等官方状态源；无法跨域读取的来源会单独标记。"
       loading={loading}
       progress={progress}
       summary={
@@ -118,7 +127,7 @@ export default function StatusPage() {
                 {vendor.services.length ? (
                 <div className="matrix-list">
                   {vendor.services.map((service) => (
-                    <div key={service.id} className="matrix-row">
+                    <div key={service.id} className="matrix-row status-vendor-service-row">
                       <div>
                         <strong>{service.label}</strong>
                         <p className="muted" style={{ wordBreak: "break-all" }}>{service.sourceName}</p>

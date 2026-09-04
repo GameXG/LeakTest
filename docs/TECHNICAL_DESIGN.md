@@ -2,599 +2,205 @@
 
 ## 1. System Overview
 
-LeakTest consists of a browser client, a primary web application, an aggregation API, and supporting observation services.
+LeakTest is a browser-native diagnostic application. The browser performs measurements directly against public third-party endpoints, normalizes the responses, scores the evidence, and renders the result in the page.
 
 ```text
-Browser Client
-  -> Web App
-  -> Detection API
-  -> Rule Engine
-  -> Report Generator
-
-Detection API
-  -> Multi-region HTTP Echo Nodes
-  -> Authoritative DNS Servers
-  -> STUN/TURN Nodes
-  -> GeoIP and ASN Intelligence
-  -> PostgreSQL
-  -> Redis
+Browser
+  -> Next.js application served by Cloudflare Workers
+  -> Third-party IP, GeoIP, trace, DNS-probe, STUN, AI, and status sources
+  -> Browser-side normalizers and scoring
+  -> Local diagnostic view
 ```
 
-## 2. Proposed Stack
+There is no first-party API, session service, report store, status proxy, or server-side aggregation layer in the current product.
 
-- Frontend: Next.js with TypeScript
-- Backend API: Fastify with TypeScript
-- Database: PostgreSQL
-- Cache and queue: Redis and BullMQ
-- DNS authority: CoreDNS or PowerDNS
-- STUN or TURN: coturn
-- Telemetry: OpenTelemetry and Sentry
+## 2. Stack
 
-This split keeps the core product in one TypeScript codebase while allowing DNS and STUN to remain specialized infrastructure.
+- Frontend: Next.js with TypeScript and React
+- Local development: Next.js dev server in `apps/web`
+- Production: OpenNext on Cloudflare Workers in `cfworker`
+- Upstream access: browser `fetch`, image requests, and WebRTC APIs
+- State: React state and browser-local history where a page needs it
+
+The Worker is an application delivery runtime. It is not an intermediary for the diagnostic traffic. This keeps measurements tied to the user's actual browser network path and avoids turning the Worker into an API gateway or a second billing and rate-limit identity.
 
 ## 3. Logical Components
 
-### 3.1 Web Application
+### 3.1 Browser application
 
 Responsibilities:
 
-- Render homepage, run page, and report page
-- Create sessions
+- Render the diagnostic pages and status page
 - Execute browser-side collectors
-- Submit collection data to the API
+- Measure latency and browser-visible reachability
+- Normalize third-party responses
+- Calculate capped risk scores where applicable
+- Show raw evidence and distinguish unavailable data from positive detections
 
-### 3.2 Detection API
-
-Responsibilities:
-
-- Issue signed session tokens
-- Accept collector payloads
-- Enrich IP and resolver observations with geo and ASN data
-- Execute rule engine
-- Persist findings and reports
-
-### 3.3 HTTP Echo Nodes
+### 3.2 Cloudflare Workers application
 
 Responsibilities:
 
-- Return the client IP seen at each region
-- Attach server timestamp and region identifier
-- Avoid caching and include strict CORS policy for the first-party origin
+- Serve the compiled Next.js application
+- Apply page redirects and cache headers
+- Provide the production hosting surface
 
-### 3.4 Authoritative DNS Service
+It does not receive collector payloads and does not make the user's third-party requests on their behalf.
 
-Responsibilities:
+### 3.3 Third-party observation sources
 
-- Serve unique session subdomains
-- Log resolver IP, query type, ECS, and timestamps
-- Push normalized query events to the API or queue
+Sources are configured in `lib/source-registry.ts` and called from browser hooks:
 
-### 3.5 STUN Nodes
+- IP and GeoIP providers
+- Cloudflare Trace and public exit probes
+- DNS leak-probe hostnames
+- AI service reachability targets
+- STUN servers for WebRTC candidates
+- Official service status JSON endpoints
 
-Responsibilities:
+Each source is treated as optional. A failed or blocked source must not be converted into a successful observation.
 
-- Provide regional STUN endpoints for ICE candidate discovery
-- Remain stateless where possible
+## 4. Browser Request Model
 
-## 4. Session Lifecycle
+### 4.1 Direct requests
 
-### 4.1 Flow
+The browser calls public sources directly with `credentials: "omit"` where the source is read as data. Requests use bounded timeouts and `cache: "no-store"` for live diagnostics.
 
-1. Client requests `POST /api/session`
-2. API creates a session and returns `sessionId`, `clientToken`, and detector config
-3. Client runs collectors in parallel where safe
-4. Client posts results incrementally
-5. Client calls `POST /api/session/:id/finalize`
-6. API aggregates observations, runs rules, stores findings, and generates a report
-7. Client navigates to the report page
+The result therefore describes what the current browser can observe. It does not claim that a Cloudflare Worker or another server can reach the same source.
 
-### 4.2 Session States
+### 4.2 CORS boundary
 
-- `created`
-- `collecting`
-- `awaiting_finalize`
-- `processing`
-- `completed`
-- `expired`
-- `failed`
+Data reads require the third-party source to permit browser CORS. Opaque reachability probes may use `mode: "no-cors"`, but they cannot be treated as readable data.
 
-## 5. Detector Design
+The UI must keep these cases separate:
 
-### 5.1 IP Detection
+- readable response with a positive or negative observation
+- HTTP error from a readable source
+- timeout or network failure
+- opaque reachability result
+- source that is not browser-readable because of CORS policy
 
-Client behavior:
+## 5. Diagnostic Modules
 
-- Call at least three echo nodes from separate regions
-- Measure elapsed time from the browser side
-- Submit each node response independently to reduce blast radius from partial failures
+### 5.1 IP and exit identity
 
-Echo node response shape:
+The browser calls multiple public IP and GeoIP sources, compares returned identities, and reports provider agreement or drift. Latency is supporting evidence only.
 
-```json
-{
-  "vantage": "us-east",
-  "observedIp": "203.0.113.10",
-  "ipFamily": "ipv4",
-  "serverTime": "2026-04-11T10:00:00Z"
-}
+### 5.2 DNS path
+
+Browsers cannot directly reveal the operating system resolver configuration. The product uses browser-triggered probe hostnames and labels this signal as simulated unless an independently deployed authoritative service provides resolver-side evidence. A missing authoritative service is a capability limitation, not a clean result.
+
+### 5.3 WebRTC and UDP
+
+The browser creates a bounded `RTCPeerConnection`, configures the selected STUN servers, and parses ICE candidates locally. Candidate type, address family, public addresses, and related addresses are displayed with the platform's privacy behavior preserved.
+
+### 5.4 AI reachability
+
+The browser probes configured AI targets using opaque fetches and image requests where appropriate. The result describes browser-visible reachability and timing; it is not an API health guarantee and does not send user credentials.
+
+### 5.5 Environment consistency
+
+The browser compares timezone, UTC offset, language, screen, device, WebGL, and User-Agent signals. Correlated signals must not be counted twice, and the mainland likelihood score is capped at 10:
+
+- `0-3`: safe
+- `4-7`: suspicious
+- `8-10`: dangerous
+
+## 6. Official Status Page
+
+The `/status` page uses a browser-only hook and a pure normalizer in `lib/status-normalizer.ts`.
+
+### 6.1 Readable sources
+
+- Claude summary JSON
+- OpenAI summary JSON
+- Google incidents JSON
+
+Each source is fetched independently with `Promise.allSettled`, so one source cannot hide another source's result.
+
+### 6.2 Restricted sources
+
+- OpenAI Atom/RSS feeds are not used because they are not browser-readable.
+- Google products JSON is not used because it is not browser-readable. Google service rows are only considered known when `incidents.json` contains a directly matching `service_name`.
+- Apple system status data is not fetched from the browser when its response is not CORS-readable. The page marks Apple as restricted and links to the official status page.
+
+If a source does not provide enough evidence for a service, the service is shown as `未提供` or `暂时无法获取`. It must not be shown as `正常运行` merely because the request failed or because an incident list omitted that service.
+
+### 6.3 Normalized shape
+
+The status normalizer produces:
+
+```ts
+type OfficialVendorStatus = {
+  id: string;
+  label: string;
+  pageUrl: string;
+  apiUrl: string;
+  overallLabel: string;
+  overallIndicator: string;
+  updatedAt?: string;
+  services: Array<{
+    id: string;
+    label: string;
+    status: string;
+    statusCn: string;
+    sourceName: string;
+    updatedAt?: string;
+  }>;
+  sourceCount: number;
+  error?: string;
+};
 ```
 
-Derived fields:
+The normalized object is held in React state only. No status response is sent back to LeakTest.
 
-- ASN
-- organization
-- country, region, city
-- is_datacenter
-- proxy intelligence labels if configured later
+## 7. State and Privacy
 
-Primary findings:
+- No server-created session is required for a diagnostic run.
+- No collector payload is posted to a LeakTest API.
+- Credentials are not included in third-party diagnostic requests.
+- Browser-local history is used only for the views that explicitly need it.
+- Raw third-party response data is reduced to the fields needed for the current view.
+- Public upstream endpoints remain subject to their own retention, rate limits, and privacy policies.
 
-- Different public IPs across vantage points
-- Exit IPv4 looks proxied while IPv6 exposes a different network
-- Exit path appears inconsistent with declared locale
+## 8. Removed Server API
 
-### 5.2 DNS Leak Detection
+The former Fastify service and unused Next.js API routes were removed because the live product does not depend on session creation, collector ingestion, report retrieval, GeoIP proxying, IP-risk proxying, or status aggregation.
 
-Design note: browsers cannot directly reveal system DNS settings. DNS leak detection is inferred through authoritative DNS observation.
+The following are intentionally not part of the deployment contract:
 
-Flow:
+- `POST /api/session`
+- `POST /api/collect/*`
+- `POST /api/session/:id/finalize`
+- `GET /api/report/:id`
+- `GET /api/official-status`
+- `GET /api/geoip/:ip`
+- `GET /api/iprisk/:ip`
+- legacy Claude session and DNS routes
 
-1. API creates unique hostnames for a session
-2. Browser requests assets or fetch targets on those hostnames
-3. Recursive resolvers contact the authoritative DNS service
-4. DNS query events are linked back to the session
+If a future requirement needs durable reports, batch processing, or an external developer API, it should be designed as a separate product boundary rather than silently restoring the old collector API.
 
-Recommended hostname sets:
+## 9. Verification
 
-- base lookup set
-- uncached random subdomain set
-- dual-stack set
-- low TTL set
+Before release:
 
-Captured fields:
+1. Run `npm run typecheck` in `apps/web`.
+2. Run `npm run typecheck` in `cfworker`.
+3. Compare shared files under `app/`, `components/`, `lib/`, and `public/` with `cmp` or `diff`.
+4. Open the local `/status` page and confirm direct upstream requests, partial failures, restricted sources, and refresh behavior.
+5. Open `/risk` and confirm the browser diagnostic flow remains intact.
+6. Build the production Worker and verify the compiled output has no `/api/official-status` route.
 
-- fqdn
-- resolver_ip
-- resolver_asn
-- resolver_country
-- query_type
-- ecs_prefix
-- first_seen_at
+Static type checks and local browser checks do not prove that every user's network can reach every third-party source. Production status must continue to expose those source-level limits.
 
-Primary findings:
+## 10. Deployment
 
-- Resolver belongs to the user's local ISP while HTTP exit belongs to a proxy ASN
-- Resolver geography diverges sharply from HTTP exit geography
-- Multiple unrelated resolvers appear in a short session without clear explanation
-
-### 5.3 WebRTC Leak Detection
-
-Client behavior:
-
-- Create `RTCPeerConnection`
-- Configure multiple STUN servers
-- Collect ICE candidates for a bounded time window
-- Parse and normalize candidate details in the browser before upload
-
-Captured fields:
-
-- candidate_type
-- address
-- port
-- transport
-- related_address
-- protocol
-- raw_candidate
-
-Primary findings:
-
-- WebRTC exposes a public IP different from the HTTP exit IP
-- IPv6 leaks through WebRTC while HTTP traffic appears proxied over IPv4
-- Too many interface candidates suggest virtualized or patched environments
-
-### 5.4 Timezone Consistency
-
-Collected signals:
-
-- browser timezone via `Intl.DateTimeFormat`
-- UTC offset
-- local wall clock
-- `navigator.language`
-- `navigator.languages`
-- request `Accept-Language`
-
-Primary findings:
-
-- Browser timezone differs from IP-inferred timezone
-- Offset does not match the named IANA timezone
-- Locale and timezone both diverge from exit geography
-
-### 5.5 Device Environment Authenticity
-
-Collected signals:
-
-- `navigator.platform`
-- `navigator.hardwareConcurrency`
-- `navigator.deviceMemory`
-- `maxTouchPoints`
-- display metrics
-- WebGL vendor and renderer
-- media capability signals
-- basic automation indicators
-
-Primary findings:
-
-- Claimed mobile device without touch profile
-- macOS or iOS claims paired with incompatible GPU or browser behavior
-- Highly templated or impossible hardware combinations
-
-### 5.6 User-Agent Authenticity
-
-Compared signals:
-
-- HTTP User-Agent header
-- UA-CH
-- runtime capability matrix
-- inferred browser engine behavior
-
-Primary findings:
-
-- User-Agent and UA-CH disagreement
-- Claimed Safari with Chromium-only runtime features
-- Claimed modern Chrome missing expected APIs
-
-## 6. Rule Engine
-
-The rule engine should be data-driven. Each rule evaluates normalized observations and returns findings with a score delta and evidence payload.
-
-Suggested rule structure:
-
-```json
-{
-  "code": "WEBRTC_PUBLIC_IP_MISMATCH",
-  "severity": "high",
-  "scoreDelta": 35,
-  "title": "WebRTC public IP differs from HTTP exit IP"
-}
+```text
+Source: cfworker/
+  -> OpenNext build
+  -> Cloudflare Workers deployment
+  -> Browser loads application
+  -> Browser calls third-party sources directly
 ```
 
-Recommended categories:
-
-- IP consistency
-- DNS leak
-- WebRTC leak
-- timezone mismatch
-- device authenticity
-- user-agent authenticity
-
-Example rules:
-
-- HTTP exit IP and WebRTC public IP differ: `+35`
-- DNS resolver maps to local ISP while exit IP maps to proxy ASN: `+30`
-- Browser timezone and IP geography differ materially: `+10`
-- User-Agent and UA-CH disagree on platform or brand: `+25`
-- Claimed mobile environment has no touch capability and desktop display metrics: `+20`
-
-Risk mapping:
-
-- `0-19`: consistent
-- `20-49`: mildly suspicious
-- `50-79`: suspicious
-- `80-100`: high risk
-
-## 7. Data Model
-
-### 7.1 session
-
-```sql
-create table session (
-  id uuid primary key,
-  status text not null,
-  client_token_hash text not null,
-  consent_version text not null,
-  created_at timestamptz not null default now(),
-  expires_at timestamptz not null,
-  finalized_at timestamptz
-);
-```
-
-### 7.2 http_observation
-
-```sql
-create table http_observation (
-  id uuid primary key,
-  session_id uuid not null references session(id),
-  vantage text not null,
-  observed_ip inet not null,
-  ip_family text not null,
-  asn integer,
-  organization text,
-  country text,
-  region text,
-  city text,
-  is_datacenter boolean,
-  headers_json jsonb,
-  rtt_ms integer,
-  created_at timestamptz not null default now()
-);
-```
-
-### 7.3 dns_observation
-
-```sql
-create table dns_observation (
-  id uuid primary key,
-  session_id uuid not null references session(id),
-  fqdn text not null,
-  resolver_ip inet not null,
-  resolver_asn integer,
-  resolver_organization text,
-  resolver_country text,
-  ecs_prefix text,
-  query_type text not null,
-  queried_at timestamptz not null
-);
-```
-
-### 7.4 webrtc_candidate
-
-```sql
-create table webrtc_candidate (
-  id uuid primary key,
-  session_id uuid not null references session(id),
-  candidate_type text not null,
-  address text not null,
-  port integer,
-  transport text,
-  related_address text,
-  protocol text,
-  raw_candidate text,
-  created_at timestamptz not null default now()
-);
-```
-
-### 7.5 fingerprint_snapshot
-
-```sql
-create table fingerprint_snapshot (
-  id uuid primary key,
-  session_id uuid not null references session(id),
-  ua text,
-  ua_ch_json jsonb,
-  platform text,
-  languages_json jsonb,
-  timezone text,
-  utc_offset_minutes integer,
-  screen_json jsonb,
-  webgl_json jsonb,
-  device_signals_json jsonb,
-  created_at timestamptz not null default now()
-);
-```
-
-### 7.6 finding
-
-```sql
-create table finding (
-  id uuid primary key,
-  session_id uuid not null references session(id),
-  rule_code text not null,
-  severity text not null,
-  score_delta numeric not null,
-  title text not null,
-  evidence_json jsonb not null,
-  created_at timestamptz not null default now()
-);
-```
-
-### 7.7 report
-
-```sql
-create table report (
-  id uuid primary key,
-  session_id uuid not null unique references session(id),
-  total_score numeric not null,
-  risk_level text not null,
-  summary_json jsonb not null,
-  generated_at timestamptz not null default now()
-);
-```
-
-## 8. API Design
-
-### 8.1 Create Session
-
-`POST /api/session`
-
-Response:
-
-```json
-{
-  "sessionId": "uuid",
-  "clientToken": "signed-token",
-  "config": {
-    "echoNodes": [
-      { "id": "ap-sg", "url": "https://ap.example.com/echo" },
-      { "id": "eu-de", "url": "https://eu.example.com/echo" },
-      { "id": "us-va", "url": "https://us.example.com/echo" }
-    ],
-    "stunServers": [
-      "stun:stun-ap.example.com:3478",
-      "stun:stun-eu.example.com:3478",
-      "stun:stun-us.example.com:3478"
-    ],
-    "dnsTargets": [
-      "a1.session.example.net",
-      "b1.session.example.net"
-    ]
-  }
-}
-```
-
-### 8.2 Collect Fingerprint
-
-`POST /api/collect/fingerprint`
-
-Payload:
-
-```json
-{
-  "sessionId": "uuid",
-  "token": "signed-token",
-  "ua": "...",
-  "uaCh": {},
-  "timezone": "Europe/Berlin",
-  "utcOffsetMinutes": -120,
-  "languages": ["en-US", "en"],
-  "screen": {},
-  "webgl": {},
-  "deviceSignals": {}
-}
-```
-
-### 8.3 Collect HTTP Observation
-
-`POST /api/collect/http`
-
-Payload:
-
-```json
-{
-  "sessionId": "uuid",
-  "token": "signed-token",
-  "vantage": "us-va",
-  "observedIp": "203.0.113.10",
-  "ipFamily": "ipv4",
-  "rttMs": 183
-}
-```
-
-### 8.4 Collect WebRTC Observation
-
-`POST /api/collect/webrtc`
-
-Payload:
-
-```json
-{
-  "sessionId": "uuid",
-  "token": "signed-token",
-  "candidates": [
-    {
-      "candidateType": "srflx",
-      "address": "198.51.100.10",
-      "port": 50000,
-      "transport": "udp",
-      "relatedAddress": "10.0.0.15"
-    }
-  ]
-}
-```
-
-### 8.5 Finalize Session
-
-`POST /api/session/:id/finalize`
-
-Behavior:
-
-- verify session completeness
-- ingest delayed DNS events if available
-- run rule engine
-- persist findings and report
-
-### 8.6 Get Report
-
-`GET /api/report/:id`
-
-Response sections:
-
-- summary
-- module statuses
-- findings
-- evidence
-
-## 9. Frontend Pages
-
-### 9.1 Home
-
-- value proposition
-- what is collected
-- consent acknowledgment
-- start test action
-
-### 9.2 Run Page
-
-- progress view
-- detector status list
-- retry or timeout messages
-- optional advanced panel for raw collector state
-
-### 9.3 Report Page
-
-- total score and risk level
-- module cards
-- evidence table
-- remediation tips
-- later: JSON export
-
-## 10. Deployment Topology
-
-Minimum recommended production footprint:
-
-- 1 primary web and API deployment
-- 3 regional HTTP echo nodes
-- 2 authoritative DNS nodes
-- 3 STUN nodes
-- 1 PostgreSQL instance
-- 1 Redis instance
-
-Traffic notes:
-
-- Echo endpoints should disable caching
-- DNS authority should be isolated from the main app surface
-- STUN should be rate-limited and monitored to prevent abuse
-
-## 11. Security and Privacy
-
-- Require signed session tokens on all collector endpoints
-- Apply per-IP and per-session rate limits
-- Set report expiration windows
-- Store only necessary raw artifacts
-- Separate privileged admin surfaces from public report access
-
-## 12. Known Limits
-
-- DNS leak conclusions are inferred from authoritative observation, not direct system inspection
-- WebRTC signal quality depends on browser policy and platform
-- Device and User-Agent authenticity are probabilistic, not absolute
-- Corporate networks and public DNS providers can create ambiguous cases
-
-## 13. Delivery Plan
-
-### Stage 1
-
-- monorepo setup
-- session API
-- browser collector shell
-- IP and timezone detectors
-- basic report page
-
-### Stage 2
-
-- DNS authority integration
-- DNS event ingestion
-- WebRTC detector
-- expanded scoring rules
-
-### Stage 3
-
-- device authenticity engine
-- User-Agent authenticity engine
-- report export
-
-### Stage 4
-
-- observability
-- abuse controls
-- admin metrics
-- public API and batch mode
+Deploy from `cfworker` with `npm run deploy`. No separate API process, database, queue, or cache service is required for the current browser-native architecture.

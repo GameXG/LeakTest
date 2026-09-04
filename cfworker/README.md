@@ -1,19 +1,21 @@
 # LeakTest Cloudflare Worker
 
-This directory contains a standalone Cloudflare Workers build of the current LeakTest front-end.
+This directory contains the deployable Cloudflare Workers mirror of the LeakTest frontend.
 
-It is intentionally independent from the monorepo `apps/api` workspace. The user-facing pages and the route handlers required by the pages are embedded here so the site can be deployed as a single Workers application.
+The application is browser-native: the Worker serves the Next.js application and does not expose a first-party diagnostic, report, session, GeoIP, risk, or official-status API.
 
 ## Included
 
 - Next.js 16 app-router pages
-- Local route handlers used by the UI
+- Browser-side diagnostic collectors
+- Direct official status-source reads from the `/status` page
 - Cloudflare Workers deployment config via OpenNext
 
-## Not Included
+## Runtime boundary
 
-- The separate `apps/api` Fastify service
-- Node-only backend runtime
+- Third-party diagnostic requests originate in the user's browser.
+- The Worker does not proxy, aggregate, store, or bill those upstream requests.
+- Official sources that fail browser CORS checks are displayed as restricted or unavailable.
 
 ## Install
 
@@ -49,4 +51,4 @@ npm run deploy
 
 - The build targets Cloudflare Workers using `@opennextjs/cloudflare`.
 - `nodejs_compat` is enabled in `wrangler.jsonc`.
-- Current pages mainly depend on `fetch`, App Router, and route handlers, so no extra R2/KV/D1 bindings are required for the current feature set.
+- No extra R2/KV/D1 bindings or separate API process are required for the current feature set.

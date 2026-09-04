@@ -450,6 +450,20 @@ dd {
   text-align: right;
 }
 
+.status-vendor-service-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(118px, max-content);
+  align-items: center;
+}
+
+.status-vendor-service-row > :first-child {
+  min-width: 0;
+}
+
+.status-vendor-service-row .matrix-meta {
+  min-width: 0;
+}
+
 .status-vendor-list {
   margin-top: 24px;
   display: grid;
@@ -598,6 +612,10 @@ dd {
   .matrix-meta {
     justify-items: start;
     text-align: left;
+  }
+
+  .status-vendor-service-row {
+    grid-template-columns: 1fr;
   }
 
   .status-vendor-list {
