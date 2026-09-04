@@ -1,13 +1,19 @@
 import { SOURCE_REGISTRY } from "../../lib/source-registry";
 import type { AppleStatusResponse } from "../../lib/status-normalizer";
 
-export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 const responseHeaders = {
   "Cache-Control": "no-store, max-age=0",
   "Content-Type": "application/json; charset=utf-8"
 };
+
+function jsonResponse(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: responseHeaders
+  });
+}
 
 function isAppleStatusResponse(value: unknown): value is AppleStatusResponse {
   if (!value || typeof value !== "object") return false;
@@ -26,25 +32,16 @@ export async function GET() {
     });
 
     if (!upstream.ok) {
-      return Response.json(
-        { error: `Apple 官方状态源返回 HTTP ${upstream.status}` },
-        { status: 502, headers: responseHeaders },
-      );
+      return jsonResponse({ error: `Apple 官方状态源返回 HTTP ${upstream.status}` }, 502);
     }
 
     const payload = (await upstream.json()) as unknown;
     if (!isAppleStatusResponse(payload)) {
-      return Response.json(
-        { error: "Apple 官方状态源返回了无法识别的数据结构" },
-        { status: 502, headers: responseHeaders },
-      );
+      return jsonResponse({ error: "Apple 官方状态源返回了无法识别的数据结构" }, 502);
     }
 
-    return Response.json(payload, { headers: responseHeaders });
+    return jsonResponse(payload);
   } catch {
-    return Response.json(
-      { error: "Apple 官方状态源暂时不可用" },
-      { status: 502, headers: responseHeaders },
-    );
+    return jsonResponse({ error: "Apple 官方状态源暂时不可用" }, 502);
   }
 }
