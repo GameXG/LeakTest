@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { SOURCE_REGISTRY } from "./source-registry";
 import {
-  buildBrowserRestrictedVendor,
+  buildAppleVendor,
   buildClaudeVendor,
   buildGoogleVendor,
   buildOpenAiVendor,
   buildUnavailableVendor,
+  type AppleStatusResponse,
   type GoogleIncident,
   type OfficialSummaryResponse,
   type OfficialVendorStatus
@@ -72,10 +73,11 @@ export function useOfficialStatusReport() {
     async function run() {
       setState(initialState);
 
-      const [claudeSummary, openAiSummary, googleIncidents] = await Promise.allSettled([
+      const [claudeSummary, openAiSummary, googleIncidents, appleSummary] = await Promise.allSettled([
         fetchJson<OfficialSummaryResponse>(SOURCE_REGISTRY.officialStatus.claude.apiUrl),
         fetchJson<OfficialSummaryResponse>(SOURCE_REGISTRY.officialStatus.openai.apiUrl),
-        fetchJson<GoogleIncident[]>(SOURCE_REGISTRY.officialStatus.google.incidentsUrl)
+        fetchJson<GoogleIncident[]>(SOURCE_REGISTRY.officialStatus.google.incidentsUrl),
+        fetchJson<AppleStatusResponse>(SOURCE_REGISTRY.officialStatus.apple.browserApiUrl)
       ]);
 
       if (cancelled) {
@@ -109,16 +111,17 @@ export function useOfficialStatusReport() {
             SOURCE_REGISTRY.officialStatus.google.incidentsUrl,
             errorMessage(googleIncidents.reason),
           );
-      const appleVendor = buildBrowserRestrictedVendor(
-        "apple",
-        "Apple",
-        SOURCE_REGISTRY.officialStatus.apple.pageUrl,
-        SOURCE_REGISTRY.officialStatus.apple.apiUrl,
-        "Apple 官方状态数据未开放浏览器跨域读取，请打开官方状态页核对。",
-      );
+      const appleVendor = appleSummary.status === "fulfilled"
+        ? buildAppleVendor(appleSummary.value)
+        : buildUnavailableVendor(
+            "apple",
+            "Apple",
+            SOURCE_REGISTRY.officialStatus.apple.pageUrl,
+            SOURCE_REGISTRY.officialStatus.apple.apiUrl,
+            errorMessage(appleSummary.reason),
+          );
       const vendors: OfficialVendorStatus[] = [claudeVendor, openAiVendor, googleVendor, appleVendor];
-      const readableVendors = vendors.filter((vendor) => vendor.id !== "apple");
-      const error = readableVendors.every((vendor) => vendor.overallIndicator === "unavailable")
+      const error = vendors.every((vendor) => vendor.overallIndicator === "unavailable")
         ? "当前浏览器无法读取任何可用的官方状态源。请检查网络或直接打开各厂商官方状态页。"
         : undefined;
 

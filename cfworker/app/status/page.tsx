@@ -56,7 +56,7 @@ export default function StatusPage() {
     <RiskShell
       section="status"
       title="服务状态查询"
-      lead="浏览器直接读取 Claude、ChatGPT、Codex、Google、Apple 等官方状态源；无法跨域读取的来源会单独标记。"
+      lead="浏览器直接读取 Claude、ChatGPT、Codex、Google 等官方状态源；Apple 通过固定的官方状态适配入口读取服务级事件。"
       loading={loading}
       progress={progress}
       summary={
@@ -130,7 +130,10 @@ export default function StatusPage() {
                     <div key={service.id} className="matrix-row status-vendor-service-row">
                       <div>
                         <strong>{service.label}</strong>
-                        <p className="muted" style={{ wordBreak: "break-all" }}>{service.sourceName}</p>
+                        {service.detail ? <p className="muted">{service.detail}</p> : null}
+                        {service.sourceName ? (
+                          <p className="muted" style={{ wordBreak: "break-all" }}>{service.sourceName}</p>
+                        ) : null}
                       </div>
                       <div className="matrix-meta">
                         <span className={`status ${serviceClass(service.status)}`}>{service.statusCn}</span>

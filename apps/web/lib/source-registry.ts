@@ -171,7 +171,8 @@ export const SOURCE_REGISTRY = {
     },
     apple: {
       pageUrl: "https://www.apple.com/support/systemstatus/",
-      apiUrl: "https://www.apple.com/support/systemstatus/data/system_status_en_US.js"
+      apiUrl: "https://www.apple.com/support/systemstatus/data/system_status_en_US.js",
+      browserApiUrl: "/apple-status"
     }
   }
 } as const;

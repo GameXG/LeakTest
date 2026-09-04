@@ -20,8 +20,8 @@ Architecture boundary:
 
 - `apps/web` is the local Next.js frontend.
 - `cfworker` is the deployable Cloudflare Workers mirror.
-- There is no first-party API, session store, report API, or status proxy in the current product.
-- The `/status` page reads CORS-enabled official sources from the user's browser. Sources that do not permit browser reads are shown as restricted instead of being guessed as healthy.
+- There is no general-purpose first-party API, session store, or report API in the current product.
+- The `/status` page reads CORS-enabled official sources from the user's browser. Apple is handled by the fixed read-only `/apple-status` adapter because Apple's official status data endpoint does not grant browser CORS; the adapter accepts no upstream URL or user data.
 - The Worker serves the application but does not proxy or aggregate third-party diagnostic requests.
 
 Local development:

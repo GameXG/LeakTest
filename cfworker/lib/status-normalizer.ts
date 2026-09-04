@@ -31,6 +31,31 @@ export type GoogleIncident = {
   };
 };
 
+export type AppleStatusEvent = {
+  statusType?: string;
+  eventStatus?: string;
+  message?: string;
+  datePosted?: string;
+  startDate?: string;
+  endDate?: string;
+  epochStartDate?: number | string;
+  epochEndDate?: number | string;
+  usersAffected?: string;
+  affectedServices?: string[];
+};
+
+export type AppleStatusService = {
+  serviceName?: string;
+  redirectUrl?: string | null;
+  events?: AppleStatusEvent[];
+};
+
+export type AppleStatusResponse = {
+  drMessage?: string | null;
+  services?: AppleStatusService[];
+  drpost?: boolean;
+};
+
 export type OfficialServiceStatus = {
   id: string;
   label: string;
@@ -38,6 +63,7 @@ export type OfficialServiceStatus = {
   statusCn: string;
   sourceName: string;
   updatedAt?: string;
+  detail?: string;
 };
 
 export type OfficialVendorStatus = {
@@ -311,6 +337,110 @@ export function buildGoogleVendor(incidents: GoogleIncident[]): OfficialVendorSt
     error: worst
       ? undefined
       : "官方事件源没有提供可直接匹配的服务明细，无法据此确认正常运行。"
+  };
+}
+
+function appleEventDate(value?: string | number) {
+  if (value === undefined || value === null || value === "") return undefined;
+
+  if (typeof value === "number" || /^\d+$/.test(value)) {
+    const numericValue = Number(value);
+    const milliseconds = numericValue < 10_000_000_000 ? numericValue * 1000 : numericValue;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function appleEventTimestamp(event: AppleStatusEvent) {
+  return (
+    appleEventDate(event.datePosted) ??
+    appleEventDate(event.startDate) ??
+    appleEventDate(event.epochStartDate)
+  );
+}
+
+function appleEventEnded(event: AppleStatusEvent) {
+  const eventText = `${event.statusType ?? ""} ${event.eventStatus ?? ""}`.toLowerCase();
+  if (/resolved|complete|completed|closed|ended|restored/.test(eventText)) return true;
+
+  const endDate = appleEventDate(event.endDate) ?? appleEventDate(event.epochEndDate);
+  return Boolean(endDate && Date.parse(endDate) <= Date.now());
+}
+
+function normalizeAppleEventStatus(event: AppleStatusEvent) {
+  const eventText = `${event.statusType ?? ""} ${event.eventStatus ?? ""}`.toLowerCase();
+
+  if (/maintenance|maintain/.test(eventText)) return "maintenance";
+  if (/major|outage|down|unavailable|failure|critical/.test(eventText)) return "major_outage";
+  if (/partial|degrad|disruption|intermittent|slow|investigat|issue/.test(eventText)) {
+    return "partial_outage";
+  }
+
+  return "unknown";
+}
+
+function appleServiceId(name: string | undefined, index: number) {
+  const slug = (name ?? "service")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
+  return `apple-${index}-${slug || "service"}`;
+}
+
+export function buildAppleVendor(data: AppleStatusResponse): OfficialVendorStatus {
+  const services = (data.services ?? []).map((service, index) => {
+    const activeEvents = (service.events ?? []).filter((event) => !appleEventEnded(event));
+    const latestEvent = [...activeEvents].sort((left, right) => {
+      const severityDifference =
+        severityRank(normalizeAppleEventStatus(right)) - severityRank(normalizeAppleEventStatus(left));
+      if (severityDifference !== 0) return severityDifference;
+
+      return String(appleEventTimestamp(right) ?? "").localeCompare(String(appleEventTimestamp(left) ?? ""));
+    })[0];
+    const status = latestEvent ? normalizeAppleEventStatus(latestEvent) : "operational";
+
+    return {
+      id: appleServiceId(service.serviceName, index),
+      label: service.serviceName ?? `Apple 服务 ${index + 1}`,
+      status,
+      statusCn: statusLabel(status),
+      sourceName: service.redirectUrl ?? "",
+      updatedAt: latestEvent ? appleEventTimestamp(latestEvent) : undefined,
+      detail: latestEvent?.message
+    } satisfies OfficialServiceStatus;
+  });
+  const activeServices = services.filter((service) => service.status !== "operational");
+  const worst = [...activeServices].sort(
+    (left, right) => severityRank(right.status) - severityRank(left.status),
+  )[0];
+  const hasMaintenanceNotice = Boolean(data.drpost);
+  const overallIndicator = worst?.status ?? (hasMaintenanceNotice ? "maintenance" : "none");
+  const updatedAt = services
+    .map((service) => service.updatedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  const overallLabel = worst
+    ? statusLabel(worst.status)
+    : hasMaintenanceNotice
+      ? data.drMessage ?? "维护公告"
+      : "正常运行";
+
+  return {
+    id: "apple",
+    label: "Apple",
+    pageUrl: SOURCE_REGISTRY.officialStatus.apple.pageUrl,
+    apiUrl: SOURCE_REGISTRY.officialStatus.apple.apiUrl,
+    overallLabel,
+    overallIndicator,
+    updatedAt,
+    sourceCount: services.length,
+    services,
+    error: hasMaintenanceNotice && data.drMessage ? data.drMessage : undefined
   };
 }
 
