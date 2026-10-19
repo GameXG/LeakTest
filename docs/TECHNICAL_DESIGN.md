@@ -18,6 +18,8 @@ There is no first-party API, session service, report store, status proxy, or ser
 
 - Frontend: Next.js with TypeScript and React
 - Local development: Next.js dev server in `apps/web`
+- Node.js/npm deployment: Next.js production server from `apps/web`
+- Docker Compose deployment: the root `Dockerfile` runs the Node.js/npm deployment
 - Production: OpenNext on Cloudflare Workers in `cfworker`
 - Upstream access: browser `fetch`, image requests, and WebRTC APIs
 - State: React state and browser-local history where a page needs it
@@ -47,7 +49,11 @@ Responsibilities:
 
 It does not receive collector payloads and does not make the user's third-party requests on their behalf.
 
-### 3.3 Third-party observation sources
+### 3.3 Node.js and Docker Compose application
+
+The root npm scripts build and start `apps/web` with the standard Next.js production server. `compose.yaml` packages that same runtime in a Node.js container and exposes port 3000. These deployment modes only serve the frontend; browser diagnostic requests still go directly to the configured third-party sources.
+
+### 3.4 Third-party observation sources
 
 Sources are configured in `lib/source-registry.ts` and called from browser hooks:
 

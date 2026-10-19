@@ -2,6 +2,8 @@
 
 This directory contains the deployable Cloudflare Workers mirror of the LeakTest frontend.
 
+The project is released under the [GNU General Public License v3.0](../LICENSE). For a Node.js/npm or Docker Compose deployment, use the repository root instructions; this directory is the Cloudflare Workers target.
+
 The application is browser-native: the Worker serves the Next.js application and does not expose a first-party diagnostic, report, session, GeoIP, or risk API. It includes one fixed read-only `/apple-status` adapter for Apple's official status data because that upstream endpoint does not grant browser CORS.
 
 ## Included

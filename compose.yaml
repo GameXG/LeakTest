@@ -1,0 +1,25 @@
+services:
+  leaktest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: leaktest:local
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/risk').then(response => {
+          process.exit(response.ok ? 0 : 1) }).catch(() => process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

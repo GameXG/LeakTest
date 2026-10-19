@@ -1,0 +1,13 @@
+.git
+.github
+.next
+.open-next
+.wrangler
+node_modules
+coverage
+dist
+*.log
+.DS_Store
+.env
+.env.*
+.dev.vars
